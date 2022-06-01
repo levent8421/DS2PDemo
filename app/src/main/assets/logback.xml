@@ -1,0 +1,16 @@
+<configuration>
+    <property name="DEFAULT_LOG_PATTERN"
+        value="[(%d{yyyy-MM-dd HH:mm:ss.SSS})] (%-5level{5}) ([%-20thread{20}])-([%-40logger{40}]):%msg%n"/>
+    <appender name="logcat" class="ch.qos.logback.classic.android.LogcatAppender">
+        <tagEncoder>
+            <pattern>${DEFAULT_LOG_PATTERN}</pattern>
+        </tagEncoder>
+        <encoder>
+            <pattern>[%-10thread] %msg</pattern>
+        </encoder>
+    </appender>
+
+    <root level="TRACE">
+        <appender-ref ref="logcat" />
+    </root>
+</configuration>
