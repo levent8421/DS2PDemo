@@ -69,6 +69,32 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         btnStop.setOnClickListener(this);
     }
 
+    @SuppressLint("NonConstantResourceId")
+    @Override
+    public void onClick(View view) {
+        try {
+            switch (view.getId()) {
+                case R.id.btn_start:
+                    start();
+                    break;
+                case R.id.btn_stop:
+                    stop();
+                    break;
+                default:
+                    // Do nothing
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    //// -----------------------示例代码开始----------------------------------------
+    private final List<DataChannel> channels = Lists.newArrayList();
+    private final DeviceManager deviceManager = new DefaultDeviceManager();
+
+    /**
+     * 扫描Linux系统注册的所有串口，并显示到界面上
+     */
     private void loadSerialPorts() {
         try {
             List<String> ports = SerialUtils.scanLinuxPorts();
@@ -85,9 +111,13 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         }
     }
 
-    private final List<DataChannel> channels = Lists.newArrayList();
-    private final DeviceManager deviceManager = new DefaultDeviceManager();
-
+    /**
+     * 使用界面选取的链接信息创建 链接URL
+     * ds2p:uart//%2Fdev%2FttyS0:115200/conn
+     * ds2p:tcp//192.168.2.1:20108/conn
+     *
+     * @return ConnectionUrl
+     */
     private ConnectionUrl getConnectionUrl() {
         int index = spSerialPort.getSelectedItemPosition();
         String portName = serialPorts.get(index);
@@ -99,9 +129,23 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 .withConnection(portName)
                 .withConnectionParams(List.of(baudRate))
                 .buildConnectionUrl();
-
+        // 另外一种构建方法
+        // 以下所有构建URL的操作都可以使用两种方法
+        /*
+        String urlStr = "ds2p:uart://%2Fdev%2FttyS0:115200/conn";
+        ConnectionUrl url = IdentificationUrlBuilder.parseConnectionUrl(urlStr);
+        */
     }
 
+    /**
+     * 构建驱动结构
+     *
+     * @param startAddr 开始地址
+     * @param count     设备数量
+     * @param esl       是否存在电子标签
+     * @return 设备组
+     * @throws Ds2pDeviceException error
+     */
     private List<DeviceGroup> build(int startAddr, int count, boolean esl) throws Ds2pDeviceException {
         ConnectionUrl connectionUrl = getConnectionUrl();
         // 创建一个工厂对象，并传入创建串口链接的策略
@@ -120,6 +164,15 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         return factory.getGroups();
     }
 
+    /**
+     * 创建一个库位
+     *
+     * @param connectionUrl 链接URL
+     * @param factory       工厂
+     * @param address       地址
+     * @param esl           电子标签,true时创建地址为(address+100)的电子标签设备
+     * @throws Ds2pDeviceException error
+     */
     private void buildWeightCluster(ConnectionUrl connectionUrl, SimpleUrlDeviceFactory factory, int address, boolean esl) throws Ds2pDeviceException {
         List<DeviceUrl> sensors = Lists.newArrayList();
         // 此处创建一个传感器
@@ -149,8 +202,12 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         factory.buildWeightCluster(clusterUrl, sensors, masterEsl, Collections.emptyList());
     }
 
+    /**
+     * 启动重力服务
+     *
+     * @throws Exception error
+     */
     private void start() throws Exception {
-
         // 构建设备
         int addrBegin = 1;
         int deviceCount = 10;
@@ -187,7 +244,11 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         btnStart.setEnabled(false);
     }
 
-
+    /**
+     * 停止重力服务
+     *
+     * @throws Ds2pException exception
+     */
     private void stop() throws Ds2pException {
         // 尝试停止服务,timeout表示底层将等待1000ms设备主动退出现场，否则将强制杀死
         deviceManager.shutdown(1000);
@@ -200,22 +261,5 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         btnStop.setEnabled(false);
     }
 
-    @SuppressLint("NonConstantResourceId")
-    @Override
-    public void onClick(View view) {
-        try {
-            switch (view.getId()) {
-                case R.id.btn_start:
-                    start();
-                    break;
-                case R.id.btn_stop:
-                    stop();
-                    break;
-                default:
-                    // Do nothing
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
+    /// -----------------------示例代码结束----------------------------------------
 }
