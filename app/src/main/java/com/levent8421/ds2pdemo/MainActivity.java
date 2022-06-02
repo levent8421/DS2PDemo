@@ -13,15 +13,11 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.berrontech.weight.hardware.ds2p.DeviceManager;
 import com.berrontech.weight.hardware.ds2p.Ds2pException;
-import com.berrontech.weight.hardware.ds2p.cluster.weight.DefaultCountingStrategy;
+import com.berrontech.weight.hardware.ds2p.building.SimpleUrlDeviceFactory;
+import com.berrontech.weight.hardware.ds2p.cluster.DeviceCluster;
 import com.berrontech.weight.hardware.ds2p.cluster.weight.WeightDeviceCluster;
-import com.berrontech.weight.hardware.ds2p.cluster.weight.WeightDeviceClusterSkuInfo;
-import com.berrontech.weight.hardware.ds2p.conn.serial.SerialPortConnection;
-import com.berrontech.weight.hardware.ds2p.device.esl.WeightEslDevice;
-import com.berrontech.weight.hardware.ds2p.device.esl.WeightEslDeviceParam;
-import com.berrontech.weight.hardware.ds2p.device.weight.WeightSensorDevice;
-import com.berrontech.weight.hardware.ds2p.device.weight.WeightSensorDeviceParams;
-import com.berrontech.weight.hardware.ds2p.group.general.GeneralDeviceGroup;
+import com.berrontech.weight.hardware.ds2p.device.Ds2pDeviceException;
+import com.berrontech.weight.hardware.ds2p.group.DeviceGroup;
 import com.berrontech.weight.hardware.ds2p.identification.ClusterUrl;
 import com.berrontech.weight.hardware.ds2p.identification.ConnectionUrl;
 import com.berrontech.weight.hardware.ds2p.identification.DeviceUrl;
@@ -29,11 +25,11 @@ import com.berrontech.weight.hardware.ds2p.identification.IdentificationUrl;
 import com.berrontech.weight.hardware.ds2p.identification.IdentificationUrlBuilder;
 import com.berrontech.weight.hardware.ds2p.impl.DefaultDeviceManager;
 import com.berrontech.weight.hardware.ds2p.proto.DataChannel;
-import com.berrontech.weight.hardware.ds2p.proto.Ds2pProtocolMeta;
-import com.berrontech.weight.hardware.ds2p.proto.impl.DefaultDataChannel;
+import com.google.common.collect.Lists;
 
-import java.math.BigDecimal;
-import java.net.URLEncoder;
+import org.apache.commons.lang3.exception.ExceptionUtils;
+
+import java.io.FileNotFoundException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -89,25 +85,71 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         }
     }
 
-    private DataChannel channel;
-    private DeviceManager deviceManager = new DefaultDeviceManager();
+    private final List<DataChannel> channels = Lists.newArrayList();
+    private final DeviceManager deviceManager = new DefaultDeviceManager();
+
+    private ConnectionUrl getConnectionUrl() {
+        int index = spSerialPort.getSelectedItemPosition();
+        String portName = serialPorts.get(index);
+        String baudRate = etBaudRate.getText().toString();
+        // ds2p:uart://ttyS0:115200/conn
+        return new IdentificationUrlBuilder()
+                .withPrimaryProtocol(IdentificationUrl.PROTOCOL_DS2P)
+                .withSubProtocol(IdentificationUrl.PROTOCOL_UART)
+                .withConnection(portName)
+                .withConnectionParams(List.of(baudRate))
+                .buildConnectionUrl();
+
+    }
+
+    private List<DeviceGroup> build(int startAddr, int count, boolean esl) throws Ds2pDeviceException {
+        ConnectionUrl connectionUrl = getConnectionUrl();
+        // 创建一个工厂对象，并传入创建串口链接的策略
+        SimpleUrlDeviceFactory factory = new SimpleUrlDeviceFactory((deviceName, baudRate) -> {
+            try {
+                return new Ds2pSerialPortWrapper(deviceName, baudRate);
+            } catch (FileNotFoundException e) {
+                throw new RuntimeException(ExceptionUtils.getMessage(e), e);
+            }
+        });
+        // 创建库位
+        for (int i = 0; i < count; i++) {
+            buildWeightCluster(connectionUrl, factory, startAddr + i, esl);
+        }
+        // 从工厂中获取已创建的设备组
+        return factory.getGroups();
+    }
+
+    private void buildWeightCluster(ConnectionUrl connectionUrl, SimpleUrlDeviceFactory factory, int address, boolean esl) throws Ds2pDeviceException {
+        List<DeviceUrl> sensors = Lists.newArrayList();
+        // 此处创建一个传感器
+        // ds2p:uart://ttyS0:115200/addr/1
+        DeviceUrl sensorUrl = new IdentificationUrlBuilder()
+                .copyConnection(connectionUrl)
+                .addPath(String.valueOf(address))
+                .buildDeviceUrl();
+        sensors.add(sensorUrl);
+        DeviceUrl masterEsl;
+        if (esl) {
+            // 需要创建电子标签
+            masterEsl = new IdentificationUrlBuilder()
+                    .copyConnection(connectionUrl)
+                    .addPath(String.valueOf(address + 100))
+                    .buildDeviceUrl();
+        } else {
+            // 不需要电子标签
+            masterEsl = null;
+        }
+        // 库位
+        // ds2p:uart://ttyS0:115200/cluster/S1-1
+        ClusterUrl clusterUrl = new IdentificationUrlBuilder()
+                .copyConnection(connectionUrl)
+                .addPath("S1-" + address) // 与库位名一致，全局唯一
+                .buildClusterUrl();
+        factory.buildWeightCluster(clusterUrl, sensors, masterEsl, Collections.emptyList());
+    }
 
     private void start() throws Exception {
-        // 构建数据通道（与硬件链接的通道）
-        String serialPort = serialPorts.get(spSerialPort.getSelectedItemPosition());
-        int baudRate = 115200;
-        try {
-            baudRate = Integer.parseInt(etBaudRate.getText().toString());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        Ds2pSerialPortWrapper portWrapper = new Ds2pSerialPortWrapper(serialPort, baudRate);
-        SerialPortConnection connection = new SerialPortConnection(portWrapper);
-        channel = new DefaultDataChannel(connection);
-        channel.init();
-        // 构建设备组，一个设备组对应底层一套线程，维护一个物理链接下的所有设备
-        ConnectionUrl connectionUrl = IdentificationUrlBuilder.parseConnectionUrl("ds2p:uart://" + URLEncoder.encode(serialPort, "utf8") + ":115200/conn");
-        GeneralDeviceGroup group = new GeneralDeviceGroup(connectionUrl, channel);
 
         // 构建设备
         int addrBegin = 1;
@@ -119,82 +161,40 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             e.printStackTrace();
         }
         boolean esl = cbEsl.isChecked();
-        for (int i = 0; i < deviceCount; i++) {
-            int addr = addrBegin + i;
-            WeightDeviceCluster cluster = buildCluster(channel, serialPort, baudRate, addr, esl);
-            group.addCluster(cluster);
+        List<DeviceGroup> groups = build(addrBegin, deviceCount, esl);
+        channels.clear();
+        for (DeviceGroup group : groups) {
+            // 将设备组注册到设备管理器中
+            deviceManager.addGroup(group);
+            DataChannel channel = group.getChannel();
+            // 初始化数据通道，很重要！！！！！！，在调用deviceManager.startSchedule()前必须初始化
+            channel.init();
+            // 保存数据通道，方标停止时销毁
+            channels.add(channel);
         }
-
-        // 将设备组注册到设备管理器中
-        deviceManager.addGroup(group);
         // 启动设备管理器
         deviceManager.startSchedule();
-
+        // 监听库位的状态(重量、数量、离线在线等)
+        List<DeviceGroup> groupList = deviceManager.getGroups();
+        for (DeviceGroup group : groupList) {
+            for (DeviceCluster cluster : group.getClusters()) {
+                WeightDeviceCluster weightDeviceCluster = (WeightDeviceCluster) cluster;
+                // 此处仅打印
+                weightDeviceCluster.setStateListener(new LogClusterStateListener());
+            }
+        }
         btnStop.setEnabled(true);
         btnStart.setEnabled(false);
     }
 
-    private WeightDeviceCluster buildCluster(DataChannel channel, String serialPort, int baudRate, int addr, boolean esl) {
-        // 传感器
-        WeightSensorDevice sensor = new WeightSensorDevice(channel);
-        WeightSensorDeviceParams sensorParams = sensor.getParams();
-        sensorParams.setProtocolVersion(Ds2pProtocolMeta.Versions.V21);
-        sensorParams.setAddress(addr);
-        // ds2p:uart://ttyS1:115200/addr/1-n
-        DeviceUrl sensorUrl = new IdentificationUrlBuilder().withSubProtocol(IdentificationUrl.PROTOCOL_UART)
-                .withConnection(serialPort)
-                .withConnectionParams(Collections.singletonList(baudRate))
-                .addPath(String.valueOf(addr))
-                .buildDeviceUrl();
-        sensorParams.setId(sensorUrl);
-        // 电子标签
-        WeightEslDevice eslDevice = null;
-        if (esl) {
-            int eslAddr = addr + 100;
-            DeviceUrl eslUrl = new IdentificationUrlBuilder().withSubProtocol(IdentificationUrl.PROTOCOL_UART)
-                    .withConnection(serialPort)
-                    .withConnectionParams(Collections.singletonList(baudRate))
-                    .addPath(String.valueOf(eslAddr))
-                    .buildDeviceUrl();
-            eslDevice = new WeightEslDevice(channel);
-            WeightEslDeviceParam eslParams = eslDevice.getParams();
-            eslParams.setAddress(eslAddr);
-            eslParams.setProtocolVersion(Ds2pProtocolMeta.Versions.V21);
-            eslParams.setId(eslUrl);
-        }
-        // 库位
-        // 库位URI:    ds2p:uart//ttyS1:115200/cluster/S-addr
-        ClusterUrl clusterUrl = new IdentificationUrlBuilder()
-                .withSubProtocol(IdentificationUrl.PROTOCOL_UART)
-                .withConnection(serialPort)
-                .withConnectionParams(Collections.singletonList(String.valueOf(baudRate)))
-                .addPath("S-" + addr)
-                .buildClusterUrl();
-
-        WeightDeviceCluster cluster = new WeightDeviceCluster(clusterUrl, Collections.singletonList(sensor), eslDevice, null);
-        // 状态监听， 重量变化、数量变化等的回调
-        cluster.setStateListener(new LogClusterStateListener());
-        // 计数策略， 可以把物品单重、允差等设置到这里
-        // 此处单重0.1kg 允差0.01kg 最大允差0.05kg
-        DefaultCountingStrategy countingStrategy = new DefaultCountingStrategy();
-        countingStrategy.setTolerance(BigDecimal.valueOf(0.01));
-        countingStrategy.setApw(BigDecimal.valueOf(0.1));
-        countingStrategy.setMaxError(BigDecimal.valueOf(0.05));
-        cluster.setCountingStrategy(countingStrategy);
-
-        // 库位号，物料名称、物料号等
-        cluster.setClusterName("S-" + addr);
-        WeightDeviceClusterSkuInfo skuInfo = new WeightDeviceClusterSkuInfo();
-        skuInfo.setSkuNo("123123");
-        skuInfo.setSkuName("物料名称");
-        cluster.setSkuInfo(skuInfo);
-        return cluster;
-    }
 
     private void stop() throws Ds2pException {
         // 尝试停止服务,timeout表示底层将等待1000ms设备主动退出现场，否则将强制杀死
         deviceManager.shutdown(1000);
-        channel.deInit();
+        // 销毁数据通道
+        for (DataChannel channel : channels) {
+            channel.deInit();
+        }
 
         btnStart.setEnabled(true);
         btnStop.setEnabled(false);
