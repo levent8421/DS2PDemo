@@ -13,9 +13,11 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.berrontech.weight.hardware.ds2p.DeviceManager;
 import com.berrontech.weight.hardware.ds2p.Ds2pException;
+import com.berrontech.weight.hardware.ds2p.building.Ds2pBuildingException;
 import com.berrontech.weight.hardware.ds2p.building.SimpleUrlDeviceFactory;
 import com.berrontech.weight.hardware.ds2p.cluster.DeviceCluster;
 import com.berrontech.weight.hardware.ds2p.cluster.weight.WeightDeviceCluster;
+import com.berrontech.weight.hardware.ds2p.cluster.weight.WeightDeviceClusterConfig;
 import com.berrontech.weight.hardware.ds2p.device.Ds2pDeviceException;
 import com.berrontech.weight.hardware.ds2p.group.DeviceGroup;
 import com.berrontech.weight.hardware.ds2p.identification.ClusterUrl;
@@ -29,7 +31,12 @@ import com.google.common.collect.Lists;
 
 import org.apache.commons.lang3.exception.ExceptionUtils;
 
+import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -38,6 +45,7 @@ import java.util.Map;
 import android_serialport_api.SerialUtils;
 
 public class MainActivity extends AppCompatActivity implements View.OnClickListener {
+
     private Button btnStart;
     private Button btnStop;
     private Spinner spSerialPort;
@@ -129,6 +137,13 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 .withConnection(portName)
                 .withConnectionParams(List.of(baudRate))
                 .buildConnectionUrl();
+        /*return new IdentificationUrlBuilder()
+                .withPrimaryProtocol(IdentificationUrl.PROTOCOL_DS2P)
+                .withSubProtocol(IdentificationUrl.PROTOCOL_TCP)
+                .withConnection("192.168.1.1")
+                .withConnectionParams(List.of(10010))
+                .buildConnectionUrl();*/
+
         // 另外一种构建方法
         // 以下所有构建URL的操作都可以使用两种方法
         /*
@@ -161,7 +176,56 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             buildWeightCluster(connectionUrl, factory, startAddr + i, esl);
         }
         // 从工厂中获取已创建的设备组
-        return factory.getGroups();
+        List<DeviceGroup> groups = factory.getGroups();
+        WeightDeviceCluster cluster = (WeightDeviceCluster) groups.get(0).getClusters().get(0);
+
+        String configFilePath = "/sdcard/weight_cluster.config";
+        cluster.setConfig(new WeightDeviceClusterConfig() {
+            @Override
+            public void load() {
+                super.load();
+                try {
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    FileInputStream in = new FileInputStream(configFilePath);
+                    try (out; in) {
+                        int len;
+                        byte[] buf = new byte[512];
+                        while ((len = in.read(buf)) > 0) {
+                            out.write(buf, 0, len);
+                        }
+                    }
+                    String factorStr = out.toString();
+                    BigDecimal factor = new BigDecimal(factorStr);
+                    this.setWeightCorrectionFactor(factor);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+
+            @Override
+            public void write() {
+                super.write();
+                BigDecimal factor = this.getWeightCorrectionFactor();
+                if (factor == null) {
+                    factor = BigDecimal.ONE;
+                }
+                try {
+                    String s = factor.toString();
+                    try (FileOutputStream out = new FileOutputStream(configFilePath)) {
+                        out.write(s.getBytes(StandardCharsets.UTF_8));
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+        return groups;
+    }
+
+    public void doWeightCorrect() throws Ds2pDeviceException {
+        BigDecimal targetWeight = BigDecimal.valueOf(100);
+        WeightDeviceCluster cluster = (WeightDeviceCluster) deviceManager.getGroups().get(0).getClusters().get(0);
+        cluster.updateWeightCorrectionFactor(targetWeight);
     }
 
     /**
@@ -199,7 +263,11 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 .copyConnection(connectionUrl)
                 .addPath("S1-" + address) // 与库位名一致，全局唯一
                 .buildClusterUrl();
-        factory.buildWeightCluster(clusterUrl, sensors, masterEsl, Collections.emptyList());
+        try {
+            factory.buildWeightCluster(clusterUrl, sensors, masterEsl, Collections.emptyList());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     /**
@@ -261,5 +329,53 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         btnStop.setEnabled(false);
     }
 
+    private void doZero() {
+        ClusterUrl url;
+        try {
+            // 库位ID（建议在构建时就保存该URL，之后使用该URL与DS2P驱动通信，即拿到该URL就可以对对应的设备操作·），
+            url = IdentificationUrlBuilder.parseClusterUrl("ds2p:uart://xxx:115200/cluster/S1-1-1");
+        } catch (Ds2pBuildingException e) {
+            e.printStackTrace();
+            return;
+        }
+        WeightDeviceCluster cluster = (WeightDeviceCluster) deviceManager.findCluster(url);
+        if (cluster == null) {
+            return;
+        }
+        try {
+            cluster.doZero();
+        } catch (Ds2pDeviceException e) {
+            e.printStackTrace();
+        }
+    }
     /// -----------------------示例代码结束----------------------------------------
+
+    private void buildMultiSensors() throws Ds2pException {
+        // 示例： 构建库位S-1 包含地址为1、2、3、4的四个传感器
+        // Factory 不使用串口，因此serialPortFactory参数为Null
+        SimpleUrlDeviceFactory factory = new SimpleUrlDeviceFactory(null);
+        ConnectionUrl connectionUrl = getConnectionUrl();
+        ClusterUrl clusterUrl = new IdentificationUrlBuilder()
+                .copyConnection(connectionUrl)
+                .addPath("S-1")
+                .buildClusterUrl();
+        List<DeviceUrl> sensors = Lists.newArrayList();
+        for (int addr = 1; addr <= 4; addr++) {
+            DeviceUrl deviceUrl = new IdentificationUrlBuilder()
+                    .copyConnection(connectionUrl)
+                    .addPath(String.valueOf(addr))
+                    .buildDeviceUrl();
+            sensors.add(deviceUrl);
+        }
+        factory.buildWeightCluster(clusterUrl, sensors, null, Collections.emptyList());
+        // 后续流程与原来保持一致
+        List<DeviceGroup> groups = factory.getGroups();
+        for (DeviceGroup group : groups) {
+            deviceManager.addGroup(group);
+            DataChannel channel = group.getChannel();
+            channel.init();
+        }
+
+    }
+
 }

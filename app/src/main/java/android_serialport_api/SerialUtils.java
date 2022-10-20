@@ -44,7 +44,7 @@ public class SerialUtils {
             return Collections.emptyList();
         }
         for (File device : devices) {
-            final String deviceName = device.getAbsolutePath();
+            String deviceName = device.getAbsolutePath();
             if (isSerialDeviceFile(serialDriverNodes, deviceName)) {
                 ports.add(deviceName);
             } else {

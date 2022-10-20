@@ -36,7 +36,7 @@ public class LogClusterStateListener implements WeightClusterStateListener {
         String uri = cluster.getIdentification().asIdentificationKey();
         WeightDeviceClusterState clusterState = cluster.getClusterState();
         int count = clusterState.getCount();
-        boolean countingInAccuracy = clusterState.isCountingInAccuracy();
+        boolean countingInAccuracy = clusterState.isCountingAccuracy();
         log.debug("Count change:[{}]:{}/{}", uri, count, countingInAccuracy);
     }
 
